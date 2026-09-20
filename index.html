@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Node di Browser</title>
+<style>
+:root{
+  --bg:#16222d; --panel:#1e2e3c; --line:#33475a; --ink:#e9eef3; --dim:#93a6b7;
+  --accent:#f0c674; --accent-ink:#2a2107; --ok:#8fd0a8; --err:#ef8a80;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Roboto Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+body{padding:max(14px,env(safe-area-inset-top)) 14px max(20px,env(safe-area-inset-bottom))}
+main{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+header{display:flex;align-items:center;justify-content:space-between;gap:10px}
+h1{font-size:20px;margin:0;font-weight:650;letter-spacing:-.01em}
+#status{font-size:13px;padding:4px 10px;border-radius:999px;background:var(--panel);border:1px solid var(--line);color:var(--dim)}
+#status[data-kind="ok"]{color:var(--ok);border-color:#3f6653}
+#status[data-kind="busy"]{color:var(--accent);border-color:#6b5a30}
+#status[data-kind="err"]{color:var(--err);border-color:#7a4540}
+
+.bar{display:flex;gap:8px;align-items:center}
+select{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:16px}
+
+#tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+#tabs::-webkit-scrollbar{display:none}
+.tab{flex:none;background:transparent;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-family:var(--mono);font-size:14px;color:var(--dim);cursor:pointer}
+.tab[aria-current="true"]{background:var(--panel);color:var(--ink);border-color:var(--dim)}
+.tab.plus{color:var(--accent);border-style:dashed}
+
+#editor{width:100%;height:38vh;min-height:220px;resize:vertical;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:16px;line-height:1.5;tab-size:2;white-space:pre;overflow:auto}
+
+.actions{display:flex;gap:8px}
+.btn{flex:1;border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:12px 10px;font-weight:600;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.small{flex:none;padding:9px 12px;font-weight:500;font-size:14px;color:var(--dim)}
+.btn:active{transform:translateY(1px)}
+
+#cmd{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px 12px;font-family:var(--mono);font-size:16px}
+
+.panel-head{display:flex;align-items:center;justify-content:space-between;font-size:14px;color:var(--dim)}
+#out{margin:0;height:32vh;min-height:180px;overflow:auto;background:#0f1922;border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:14px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+#out .cmd{color:var(--accent)}
+#out .ok{color:var(--ok)}
+#out .err{color:var(--err)}
+
+#frame{width:100%;height:320px;border:1px solid var(--line);border-radius:10px;background:#fff}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Node di Browser</h1>
+    <span id="status" role="status">Menyiapkan…</span>
+  </header>
+
+  <div class="bar">
+    <select id="tpl" aria-label="Template proyek">
+      <option value="">Muat template…</option>
+      <option value="hello">Halo Node (tanpa paket)</option>
+      <option value="express">Server Express</option>
+    </select>
+  </div>
+
+  <div id="tabs" role="tablist" aria-label="Berkas proyek"></div>
+  <textarea id="editor" wrap="off" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Editor kode"></textarea>
+
+  <div class="actions">
+    <button class="btn" id="install" type="button">Install</button>
+    <button class="btn primary" id="run" type="button">Jalankan</button>
+    <button class="btn" id="stop" type="button">Stop</button>
+  </div>
+  <input id="cmd" value="node index.js" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Perintah yang dijalankan">
+
+  <div class="panel-head">
+    <span>Output</span>
+    <span>
+      <button class="btn small" id="delfile" type="button">Hapus file</button>
+      <button class="btn small" id="clear" type="button">Bersihkan</button>
+    </span>
+  </div>
+  <pre id="out" aria-live="polite"></pre>
+
+  <section id="preview" hidden>
+    <div class="panel-head"><span>Pratinjau server</span></div>
+    <iframe id="frame" title="Pratinjau server" allow="cross-origin-isolated"></iframe>
+  </section>
+</main>
+
+<script type="module">
+const TEMPLATES = {
+  hello: {
+    cmd: 'node index.js',
+    files: {
+      'index.js': `const os = require('os');
+
+console.log('Node', process.version);
+console.log('Platform:', os.platform());
+
+const total = [1, 2, 3, 4].reduce((a, b) => a + b, 0);
+console.log('Jumlah:', total);
+`,
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }, null, 2) + '\n'
+    }
+  },
+  express: {
+    cmd: 'npm install && node index.js',
+    files: {
+      'index.js': `const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('<h1>Halo dari Express di dalam browser</h1>');
+});
+
+app.listen(3000, () => console.log('Server jalan di port 3000'));
+`,
+      'package.json': JSON.stringify({
+        name: 'app', version: '1.0.0',
+        dependencies: { express: '^4.19.2' }
+      }, null, 2) + '\n'
+    }
+  }
+};
+
+const $ = (s) => document.querySelector(s);
+const out = $('#out'), editor = $('#editor'), tabs = $('#tabs'), statusEl = $('#status');
+const cmdEl = $('#cmd'), preview = $('#preview'), frame = $('#frame');
+const KEY = 'nodeRunner.project';
+
+let wc = null, bootPromise = null, files = {}, current = 'index.js', proc = null, runId = 0, saveTimer = null;
+
+/* ---------- util ---------- */
+function setStatus(text, kind) { statusEl.textContent = text; statusEl.dataset.kind = kind || ''; }
+
+const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
+function log(text, cls) {
+  const clean = String(text).replace(ANSI, '').replace(/\r\n/g, '\n').replace(/\r/g, '');
+  if (!clean) return;
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = clean;
+  out.appendChild(span);
+  while (out.childNodes.length > 400) out.removeChild(out.firstChild);
+  out.scrollTop = out.scrollHeight;
+}
+
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(KEY, JSON.stringify({ files, cmd: cmdEl.value })); } catch {}
+  }, 400);
+}
+
+/* ---------- WebContainer ---------- */
+function ensureBoot() {
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      if (!window.crossOriginIsolated) {
+        throw new Error('Browser ini belum mengaktifkan cross-origin isolation, jadi Node.js tidak bisa dijalankan. Coba Chrome di Android atau di desktop, dan pastikan vercel.json ikut ter-deploy.');
+      }
+      setStatus('Memulai Node…', 'busy');
+      const { WebContainer } = await import('https://esm.sh/@webcontainer/api');
+      wc = await WebContainer.boot();
+      wc.on('server-ready', (port, url) => {
+        frame.src = url;
+        preview.hidden = false;
+        log(`Server siap di port ${port}\n`, 'ok');
+      });
+      wc.on('error', (e) => log('Error: ' + e.message + '\n', 'err'));
+      await syncFiles();
+      setStatus('Siap', 'ok');
+    })();
+    bootPromise.catch((e) => {
+      setStatus('Gagal', 'err');
+      log(e.message + '\n', 'err');
+    });
+  }
+  return bootPromise;
+}
+
+async function syncFiles() {
+  for (const [name, content] of Object.entries(files)) {
+    await wc.fs.writeFile(name, content);
+  }
+}
+
+async function run(line) {
+  line = (line || '').trim();
+  if (!line) return;
+  try { await ensureBoot(); } catch { return; }
+  if (proc) { proc.kill(); proc = null; }
+  const id = ++runId;
+  await syncFiles();
+  log('$ ' + line + '\n', 'cmd');
+  setStatus('Berjalan…', 'busy');
+
+  for (const part of line.split('&&')) {
+    const [cmd, ...args] = part.trim().split(/\s+/);
+    if (!cmd) continue;
+    let p;
+    try {
+      p = await wc.spawn(cmd, args);
+    } catch {
+      log(`Perintah tidak dikenal: ${cmd}\n`, 'err');
+      setStatus('Siap', 'ok');
+      return;
+    }
+    proc = p;
+    p.output.pipeTo(new WritableStream({ write(d) { if (id === runId) log(d); } }));
+    const code = await p.exit;
+    if (id !== runId) return;
+    if (code !== 0) { log(`Berhenti dengan kode ${code}\n`, 'err'); break; }
+  }
+  if (id === runId) { proc = null; setStatus('Siap', 'ok'); }
+}
+
+function stop() {
+  runId++;
+  if (proc) { proc.kill(); proc = null; log('Dihentikan\n', 'err'); }
+  if (wc) setStatus('Siap', 'ok');
+}
+
+/* ---------- editor & berkas ---------- */
+function renderTabs() {
+  tabs.replaceChildren();
+  for (const name of Object.keys(files)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tab';
+    b.textContent = name;
+    if (name === current) b.setAttribute('aria-current', 'true');
+    b.onclick = () => { current = name; editor.value = files[name]; renderTabs(); };
+    tabs.appendChild(b);
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'tab plus';
+  add.textContent = '+ File';
+  add.onclick = addFile;
+  tabs.appendChild(add);
+}
+
+function addFile() {
+  const name = (prompt('Nama file baru (contoh: util.js)') || '').trim();
+  if (!name) return;
+  if (!/^[\w.-]+$/.test(name)) { log('Nama file hanya boleh huruf, angka, titik, garis bawah, dan strip.\n', 'err'); return; }
+  if (files[name] !== undefined) { log(`File ${name} sudah ada.\n`, 'err'); return; }
+  files[name] = '';
+  current = name;
+  editor.value = '';
+  renderTabs();
+  save();
+}
+
+function deleteFile() {
+  if (Object.keys(files).length <= 1) { log('Proyek harus punya minimal satu file.\n', 'err'); return; }
+  if (!confirm(`Hapus ${current}?`)) return;
+  const gone = current;
+  delete files[gone];
+  if (wc) wc.fs.rm(gone, { force: true }).catch(() => {});
+  current = Object.keys(files)[0];
+  editor.value = files[current];
+  renderTabs();
+  save();
+}
+
+function loadTemplate(key) {
+  const tpl = TEMPLATES[key];
+  if (!tpl) return;
+  if (!confirm('Ganti proyek sekarang dengan template ini?')) return;
+  if (wc) for (const name of Object.keys(files)) wc.fs.rm(name, { force: true }).catch(() => {});
+  files = { ...tpl.files };
+  current = 'index.js';
+  editor.value = files[current];
+  cmdEl.value = tpl.cmd;
+  renderTabs();
+  if (wc) syncFiles();
+  save();
+}
+
+/* ---------- event ---------- */
+editor.addEventListener('input', () => { files[current] = editor.value; save(); });
+cmdEl.addEventListener('input', save);
+cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(cmdEl.value); });
+$('#run').onclick = () => run(cmdEl.value);
+$('#install').onclick = () => run('npm install');
+$('#stop').onclick = stop;
+$('#clear').onclick = () => out.replaceChildren();
+$('#delfile').onclick = deleteFile;
+$('#tpl').onchange = (e) => { loadTemplate(e.target.value); e.target.value = ''; };
+
+/* ---------- mulai ---------- */
+try {
+  const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+  if (saved && saved.files && Object.keys(saved.files).length) {
+    files = saved.files;
+    cmdEl.value = saved.cmd || 'node index.js';
+  }
+} catch {}
+if (!Object.keys(files).length) files = { ...TEMPLATES.hello.files };
+current = files['index.js'] !== undefined ? 'index.js' : Object.keys(files)[0];
+editor.value = files[current];
+renderTabs();
+log('Edit kode, lalu tekan Jalankan.\n');
+ensureBoot().catch(() => {});
+</script>
+</body>
+</html>
