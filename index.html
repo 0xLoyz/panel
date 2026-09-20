@@ -165,6 +165,15 @@ function log(text, cls) {
   scrollDown();
 }
 
+// ringkas log unduhan npm: "npm http fetch GET 200 https://.../express/-/express-4.19.2.tgz 90ms"
+function pretty(line) {
+  const m = line.match(/^npm http fetch GET (\d{3}) (\S+)/);
+  if (!m || Number(m[1]) >= 400) return line;
+  const tgz = m[2].match(/\/([^\/]+)\.tgz$/);
+  if (tgz) return 'unduh ' + tgz[1];
+  try { return 'cek ' + decodeURIComponent(m[2].replace(/^https?:\/\/[^\/]+\//, '')); } catch { return line; }
+}
+
 // keluaran proses (npm, node, dll)
 const CTRL = /\u001b\[([0-9;?]*)([A-Za-z])|\r\n|\r|\n|\u0008/g;
 function term(data) {
@@ -176,7 +185,7 @@ function term(data) {
     const t = m[0];
     if (t === '\n' || t === '\r\n') {
       if (/^[\\|\/-]$/.test(liveText)) liveText = '';
-      liveEl.textContent = liveText + '\n';
+      liveEl.textContent = pretty(liveText) + '\n';
       newLive();
     } else if (t === '\r') {
       liveText = '';
@@ -243,18 +252,21 @@ async function run(line) {
   await syncFiles();
   log('$ ' + line + '\n', 'cmd');
   setStatus('Berjalan…', 'busy');
+  startTimer(id);
 
   for (const part of line.split('&&')) {
     const [cmd, ...args] = part.trim().split(/\s+/);
     if (!cmd) continue;
     if (cmd === 'npm' && ['install', 'i', 'ci'].includes(args[0]) && !args.includes('--no-progress')) {
-      args.push('--no-progress', '--no-fund', '--no-audit');
+      args.push('--no-progress', '--no-fund', '--no-audit', '--loglevel=http');
+      log('Memasang paket, daftar unduhan muncul di bawah.\n');
     }
     let p;
     try {
       p = await wc.spawn(cmd, args);
     } catch {
       log(`Perintah tidak dikenal: ${cmd}\n`, 'err');
+      clearInterval(timer);
       setStatus('Siap', 'ok');
       return;
     }
@@ -264,11 +276,22 @@ async function run(line) {
     if (id !== runId) return;
     if (code !== 0) { log(`Berhenti dengan kode ${code}\n`, 'err'); break; }
   }
-  if (id === runId) { proc = null; setStatus('Siap', 'ok'); }
+  if (id === runId) { proc = null; clearInterval(timer); setStatus('Siap', 'ok'); }
+}
+
+let timer = null;
+function startTimer(id) {
+  clearInterval(timer);
+  const t0 = Date.now();
+  timer = setInterval(() => {
+    if (id !== runId) { clearInterval(timer); return; }
+    setStatus(`Berjalan… ${Math.floor((Date.now() - t0) / 1000)} dtk`, 'busy');
+  }, 1000);
 }
 
 function stop() {
   runId++;
+  clearInterval(timer);
   if (proc) { proc.kill(); proc = null; log('Dihentikan\n', 'err'); }
   if (wc) setStatus('Siap', 'ok');
 }
