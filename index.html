@@ -140,17 +140,59 @@ let wc = null, bootPromise = null, files = {}, current = 'index.js', proc = null
 /* ---------- util ---------- */
 function setStatus(text, kind) { statusEl.textContent = text; statusEl.dataset.kind = kind || ''; }
 
-const ANSI = /\u001b\[[0-9;?]*[A-Za-z]/g;
-function log(text, cls) {
-  const clean = String(text).replace(ANSI, '').replace(/\r\n/g, '\n').replace(/\r/g, '');
-  if (!clean) return;
-  const span = document.createElement('span');
-  if (cls) span.className = cls;
-  span.textContent = clean;
-  out.appendChild(span);
+/* Output bergaya terminal: baris "hidup" bisa ditimpa, jadi animasi spinner npm tidak menumpuk */
+let liveEl = null, liveText = '';
+function newLive() {
+  liveEl = document.createElement('span');
+  liveText = '';
+  out.appendChild(liveEl);
+}
+function scrollDown() {
   while (out.childNodes.length > 400) out.removeChild(out.firstChild);
   out.scrollTop = out.scrollHeight;
 }
+function clearOut() { out.replaceChildren(); newLive(); }
+
+// pesan dari halaman ini sendiri
+function log(text, cls) {
+  const clean = String(text).replace(/\r\n?/g, '\n');
+  if (!clean) return;
+  if (liveText) { liveEl.textContent = liveText + '\n'; newLive(); }
+  const span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = clean;
+  out.insertBefore(span, liveEl);
+  scrollDown();
+}
+
+// keluaran proses (npm, node, dll)
+const CTRL = /\u001b\[([0-9;?]*)([A-Za-z])|\r\n|\r|\n|\u0008/g;
+function term(data) {
+  CTRL.lastIndex = 0;
+  let last = 0, m;
+  while ((m = CTRL.exec(data))) {
+    liveText += data.slice(last, m.index);
+    last = CTRL.lastIndex;
+    const t = m[0];
+    if (t === '\n' || t === '\r\n') {
+      if (/^[\\|\/-]$/.test(liveText)) liveText = '';
+      liveEl.textContent = liveText + '\n';
+      newLive();
+    } else if (t === '\r') {
+      liveText = '';
+    } else if (t === '\u0008') {
+      liveText = liveText.slice(0, -1);
+    } else if (m[2] === 'D') {
+      liveText = liveText.slice(0, Math.max(0, liveText.length - (parseInt(m[1], 10) || 1)));
+    } else if (m[2] === 'G') {
+      liveText = liveText.slice(0, Math.max(0, (parseInt(m[1], 10) || 1) - 1));
+    }
+  }
+  liveText += data.slice(last);
+  liveEl.textContent = liveText;
+  scrollDown();
+}
+newLive();
 
 function save() {
   clearTimeout(saveTimer);
@@ -205,6 +247,9 @@ async function run(line) {
   for (const part of line.split('&&')) {
     const [cmd, ...args] = part.trim().split(/\s+/);
     if (!cmd) continue;
+    if (cmd === 'npm' && ['install', 'i', 'ci'].includes(args[0]) && !args.includes('--no-progress')) {
+      args.push('--no-progress', '--no-fund', '--no-audit');
+    }
     let p;
     try {
       p = await wc.spawn(cmd, args);
@@ -214,7 +259,7 @@ async function run(line) {
       return;
     }
     proc = p;
-    p.output.pipeTo(new WritableStream({ write(d) { if (id === runId) log(d); } }));
+    p.output.pipeTo(new WritableStream({ write(d) { if (id === runId) term(d); } }));
     const code = await p.exit;
     if (id !== runId) return;
     if (code !== 0) { log(`Berhenti dengan kode ${code}\n`, 'err'); break; }
@@ -293,7 +338,7 @@ cmdEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(cmdEl.valu
 $('#run').onclick = () => run(cmdEl.value);
 $('#install').onclick = () => run('npm install');
 $('#stop').onclick = stop;
-$('#clear').onclick = () => out.replaceChildren();
+$('#clear').onclick = clearOut;
 $('#delfile').onclick = deleteFile;
 $('#tpl').onchange = (e) => { loadTemplate(e.target.value); e.target.value = ''; };
 
