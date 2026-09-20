@@ -49,6 +49,7 @@ select{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);b
 #out{margin:0;height:32vh;min-height:180px;overflow:auto;background:#0f1922;border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:14px;line-height:1.5;color:var(--ink)}
 #out .ln{white-space:pre-wrap;word-break:break-word;min-height:1.5em}
 #out .qrbox{overflow:hidden;padding:6px 0;line-height:1;font-size:14px}
+#out .qrbox canvas{display:block;image-rendering:pixelated}
 #out .qrbox .ln{white-space:pre;word-break:normal;min-height:0;line-height:1}
 #out .cmd{color:var(--accent)}
 #out .ok{color:var(--ok)}
@@ -170,6 +171,7 @@ const DEF_FG = '#e9eef3', DEF_BG = '#0f1922';
 const BLOCK = /[\u2580-\u259f]/;
 
 let liveEl = null, cells = [];
+let effFg = null, effBg = null;
 let sgr = { fg: null, bg: null, bold: false, inv: false }, css = '';
 
 function xterm256(n) {
@@ -182,6 +184,7 @@ function xterm256(n) {
 function cssOf() {
   let fg = sgr.fg, bg = sgr.bg;
   if (sgr.inv) { const f = fg || DEF_FG, b = bg || DEF_BG; fg = b; bg = f; }
+  effFg = fg; effBg = bg;
   let r = '';
   if (fg) r += `color:${fg};`;
   if (bg) r += `background:${bg};`;
@@ -246,20 +249,65 @@ function fitQr(box) {
   if (need > have && have > 0) box.style.fontSize = Math.max(3, 14 * have / need * 0.98).toFixed(2) + 'px';
 }
 
+// QR dari karakter blok (▀▄█) digambar ke canvas supaya tidak ada celah antarbaris akibat font
+function drawGlyph(box) {
+  const rows = box._rows;
+  const cols = Math.max(...rows.map((r) => r.length));
+  if (!box._cv) { box._cv = document.createElement('canvas'); box.appendChild(box._cv); }
+  const cv = box._cv, dpr = window.devicePixelRatio || 1;
+  const avail = Math.max(60, box.clientWidth);
+  const u = Math.max(1, Math.min(Math.floor(avail * dpr / cols), Math.round(8 * dpr)));
+  cv.width = cols * u;
+  cv.height = rows.length * 2 * u;
+  cv.style.width = (cv.width / dpr) + 'px';
+  cv.style.height = (cv.height / dpr) + 'px';
+  const g = cv.getContext('2d');
+  g.fillStyle = DEF_BG;
+  g.fillRect(0, 0, cv.width, cv.height);
+  rows.forEach((row, r) => {
+    for (let c = 0; c < cols; c++) {
+      const cell = row[c], ch = cell ? cell.c : ' ';
+      const x = c * u, y = r * 2 * u;
+      if (cell && cell.bg) { g.fillStyle = cell.bg; g.fillRect(x, y, u, 2 * u); }
+      const full = BLOCK.test(ch) && ch !== '\u2580' && ch !== '\u2584';
+      g.fillStyle = (cell && cell.fg) || DEF_FG;
+      if (full || ch === '\u2580') g.fillRect(x, y, u, u);
+      if (full || ch === '\u2584') g.fillRect(x, y + u, u, u);
+    }
+  });
+}
+
+function qrBox(kind) {
+  let box = liveEl.previousSibling;
+  if (!(box && box.classList && box.classList.contains('qrbox') && box._kind === kind)) {
+    box = document.createElement('div');
+    box.className = 'qrbox';
+    box._kind = kind;
+    if (kind === 'glyph') box._rows = [];
+    out.insertBefore(box, liveEl);
+  }
+  return box;
+}
+
 function commitLine() {
   let text = cells.map((c) => c.c).join('');
   if (/^[\\|\/-]$/.test(text)) { cells = []; text = ''; }
   const nice = pretty(text);
-  if (nice !== text) cells = [...nice].map((c) => ({ c, s: '' }));
-  const special = cells.filter((c) => BLOCK.test(c.c) || c.s.includes('background')).length;
+  if (nice !== text) cells = [...nice].map((c) => ({ c, s: '', fg: null, bg: null }));
+  const glyphs = cells.filter((c) => BLOCK.test(c.c)).length;
+  const bgs = cells.filter((c) => c.s.includes('background')).length;
+
+  if (glyphs >= 8) {                       // QR mode kecil (karakter blok)
+    const box = qrBox('glyph');
+    box._rows.push(cells);
+    drawGlyph(box);
+    cells = [];                            // liveEl tetap kosong di bawah kotak QR
+    liveEl.replaceChildren();
+    return;
+  }
   paint(liveEl, cells);
-  if (special >= 10) {
-    let box = liveEl.previousSibling;
-    if (!(box && box.classList && box.classList.contains('qrbox'))) {
-      box = document.createElement('div');
-      box.className = 'qrbox';
-      out.insertBefore(box, liveEl);
-    }
+  if (bgs >= 10) {                         // QR mode biasa (sel berlatar warna)
+    const box = qrBox('bg');
     box.appendChild(liveEl);
     fitQr(box);
   }
@@ -302,7 +350,7 @@ const CTRL = /\u001b\[([0-9;?]*)([A-Za-z])|\u001b\][^\u0007\u001b]*(?:\u0007|\u0
 function term(data) {
   CTRL.lastIndex = 0;
   let last = 0, m;
-  const put = (str) => { for (const ch of str) cells.push({ c: ch, s: css }); };
+  const put = (str) => { for (const ch of str) cells.push({ c: ch, s: css, fg: effFg, bg: effBg }); };
   while ((m = CTRL.exec(data))) {
     put(data.slice(last, m.index));
     last = CTRL.lastIndex;
